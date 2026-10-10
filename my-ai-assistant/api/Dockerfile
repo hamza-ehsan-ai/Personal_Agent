@@ -8,7 +8,8 @@ COPY app ./app
 
 FROM python:3.13-slim-bookworm
 WORKDIR /app
-RUN useradd --create-home --uid 10001 appuser
+RUN useradd --create-home --uid 10001 appuser \
+ && mkdir -p /app/data/library && chown -R appuser /app/data
 COPY --from=build /app /app
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 ENVIRONMENT=production
 USER appuser

@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
+from app.library import LibrarySettings
 from app.main import create_app
 from app.providers.base import Provider, ProviderError
 from app.providers.registry import ProviderRegistry
@@ -24,6 +25,7 @@ class FakeProvider(Provider):
         chat_error: str | None = None,
         fail_after_tokens: int | None = None,
         default_model: str = "",
+        vision_models: set[str] | frozenset[str] = frozenset(),
     ) -> None:
         self.id = provider_id
         self.label = provider_id.title()
@@ -35,6 +37,7 @@ class FakeProvider(Provider):
         self._chat_error = chat_error
         self._fail_after = fail_after_tokens
         self._default = default_model
+        self._vision = set(vision_models)
         self.calls: list[tuple[str, list[ChatMessage]]] = []
 
     @property
@@ -48,7 +51,10 @@ class FakeProvider(Provider):
     async def list_models(self) -> list[ModelInfo]:
         if self._list_error:
             raise ProviderError(self._list_error)
-        return [ModelInfo(id=m, name=m, provider=self.id, local=self.local) for m in self._models]
+        return [
+            ModelInfo(id=m, name=m, provider=self.id, local=self.local, vision=m in self._vision)
+            for m in self._models
+        ]
 
     async def stream_chat(
         self, model: str, messages: list[ChatMessage], temperature: float | None = None
@@ -81,13 +87,37 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def make_client(settings: Settings) -> Iterator:
+def library_settings(tmp_path) -> LibrarySettings:
+    """Library off by default in tests; data in a temp folder."""
+    return LibrarySettings(
+        _env_file=None,
+        rag_engine="",
+        gemini_api_key=None,
+        library_token=None,
+        library_data_dir=tmp_path / "library",
+    )
+
+
+@pytest.fixture
+def make_client(settings: Settings, library_settings: LibrarySettings) -> Iterator:
     clients: list[TestClient] = []
 
-    def factory(*providers: Provider, **overrides) -> TestClient:
+    def factory(
+        *providers: Provider,
+        library: LibrarySettings | None = None,
+        library_engine=None,
+        **overrides,
+    ) -> TestClient:
         cfg = settings.model_copy(update=overrides)
-        registry = ProviderRegistry(list(providers), cache_ttl=0)
-        client = TestClient(create_app(cfg, registry))
+        registry = ProviderRegistry(list(providers), cache_ttl=0, vision_patterns=cfg.vision_models)
+        client = TestClient(
+            create_app(
+                cfg,
+                registry,
+                library_settings=library or library_settings,
+                library_engine=library_engine,
+            )
+        )
         client.__enter__()
         clients.append(client)
         return client

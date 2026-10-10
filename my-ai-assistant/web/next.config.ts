@@ -9,6 +9,13 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Compression would buffer the chat event stream; let your proxy/CDN compress instead.
   compress: false,
+  experimental: {
+    // Uploads pass through the /api rewrite, which caps bodies at 10 MB by default.
+    // Library files are up to 100 MB and are sent one per request.
+    proxyClientMaxBodySize: "110mb",
+    // Big uploads and slow first answers need more than the 30 s default.
+    proxyTimeout: 120_000,
+  },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_URL}/api/:path*` }];
   },

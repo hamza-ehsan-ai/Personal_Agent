@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     max_messages: int = 100
     max_message_chars: int = 32_000
 
+    # Photos. The web app resizes to a 2048 px long edge before sending, so real
+    # photos are usually well under these limits.
+    max_images_per_message: int = Field(default=5, ge=0, le=10)
+    max_images_per_request: int = Field(default=20, ge=0, le=100)
+    max_image_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
+    # Extra model ids (fnmatch patterns, e.g. "my-org/*-vl") that can read images.
+    vision_models: list[str] = Field(default_factory=list)
+
     # Local: Ollama (always tried first)
     ollama_host: str = "http://localhost:11434"
     ollama_enabled: bool = True

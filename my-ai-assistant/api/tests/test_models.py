@@ -24,7 +24,9 @@ def test_models_lists_local_first_and_picks_local_default(make_client):
         "size_bytes": None,
         "parameter_size": None,
         "family": None,
+        "vision": False,
     }
+    assert body["default_vision"] is None
 
 
 def test_models_default_is_cloud_when_no_local_models(make_client):

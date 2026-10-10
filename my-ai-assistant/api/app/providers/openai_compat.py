@@ -9,8 +9,10 @@ from collections.abc import AsyncIterator, Callable
 import openai
 from openai import AsyncOpenAI
 
+from app.images import to_base64
 from app.providers.base import Provider, ProviderError
 from app.schemas import ChatMessage, ModelInfo
+from app.vision import cloud_vision
 
 ModelFilter = Callable[[str], bool]
 
@@ -87,7 +89,10 @@ class OpenAICompatibleProvider(Provider):
                 raise ProviderError(f"{self.label}: could not list models ({exc})") from exc
 
         ids = sorted({i for i in ids if self._filter(i)} | ({self._default_model} - {""}))
-        return [ModelInfo(id=i, name=i, provider=self.id, local=False) for i in ids]
+        return [
+            ModelInfo(id=i, name=i, provider=self.id, local=False, vision=cloud_vision(self.id, i))
+            for i in ids
+        ]
 
     async def stream_chat(
         self,
@@ -102,7 +107,7 @@ class OpenAICompatibleProvider(Provider):
         try:
             stream = await client.chat.completions.create(
                 model=model,
-                messages=[m.model_dump() for m in messages],
+                messages=[to_openai_message(m) for m in messages],
                 stream=True,
                 **kwargs,
             )
@@ -119,6 +124,23 @@ class OpenAICompatibleProvider(Provider):
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.close()
+
+
+def to_openai_message(message: ChatMessage) -> dict:
+    """Chat Completions message; with images, content parts with data: URLs."""
+    if not message.images:
+        return {"role": message.role, "content": message.content}
+    parts: list[dict] = []
+    if message.content.strip():
+        parts.append({"type": "text", "text": message.content})
+    parts += [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{img.media_type};base64,{to_base64(img.raw)}"},
+        }
+        for img in message.images
+    ]
+    return {"role": message.role, "content": parts}
 
 
 def openai_model_filter() -> ModelFilter:

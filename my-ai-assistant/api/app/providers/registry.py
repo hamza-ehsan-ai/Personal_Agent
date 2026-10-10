@@ -17,6 +17,7 @@ from app.providers.base import Provider, ProviderError
 from app.providers.ollama import OllamaProvider
 from app.providers.openai_compat import OpenAICompatibleProvider, openai_model_filter
 from app.schemas import ModelInfo, ModelsResponse, ProviderStatus
+from app.vision import cloud_vision, matches_extra, ollama_vision
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,13 @@ def build_providers(settings: Settings) -> list[Provider]:
 
 
 class ProviderRegistry:
-    def __init__(self, providers: list[Provider], cache_ttl: float = 30.0) -> None:
+    def __init__(
+        self,
+        providers: list[Provider],
+        cache_ttl: float = 30.0,
+        vision_patterns: list[str] | None = None,
+    ) -> None:
+        self._vision_patterns = vision_patterns or []
         self._providers = {p.id: p for p in providers}
         self._order = [p.id for p in providers]
         self._ttl = cache_ttl
@@ -91,8 +98,11 @@ class ProviderRegistry:
         if not provider.configured:
             return status
         try:
-            status.models = await asyncio.wait_for(provider.list_models(), timeout=10)
+            status.models = await asyncio.wait_for(provider.list_models(), timeout=15)
             status.available = True
+            for m in status.models:
+                if not m.vision and matches_extra(m.id, self._vision_patterns):
+                    m.vision = True
         except (ProviderError, TimeoutError) as exc:
             status.error = str(exc) or "Timed out while listing models"
             logger.info("Provider %s unavailable: %s", provider.id, status.error)
@@ -108,32 +118,70 @@ class ProviderRegistry:
             return result
 
     @staticmethod
-    def _preferred(provider: Provider, status: ProviderStatus) -> ModelInfo | None:
-        if not status.available or not status.models:
+    def _preferred(
+        provider: Provider, status: ProviderStatus, vision: bool = False
+    ) -> ModelInfo | None:
+        """The provider's configured default model, else its first; vision-capable only if asked."""
+        if not status.available:
+            return None
+        models = [m for m in status.models if m.vision] if vision else status.models
+        if not models:
             return None
         if provider.default_model:
-            for m in status.models:
+            for m in models:
                 if m.id == provider.default_model:
                     return m
-        return status.models[0]
+        return models[0]
 
     async def models_response(self, refresh: bool = False) -> ModelsResponse:
         statuses = await self.statuses(refresh)
-        default = None
-        for status in statuses:
-            default = self._preferred(self._providers[status.id], status)
-            if default:
-                break
+
+        def first(vision: bool) -> ModelInfo | None:
+            for status in statuses:
+                found = self._preferred(self._providers[status.id], status, vision)
+                if found:
+                    return found
+            return None
+
         return ModelsResponse(
             providers=statuses,
-            default=default,
+            default=first(vision=False),
+            default_vision=first(vision=True),
             has_local_models=any(s.local and s.models for s in statuses),
         )
 
+    async def model_info(self, provider_id: str, model: str) -> ModelInfo | None:
+        for status in await self.statuses():
+            if status.id == provider_id:
+                return next((m for m in status.models if m.id == model), None)
+        return None
+
+    async def vision_check(self, provider_id: str, model: str) -> tuple[bool, str]:
+        """(can it see images, display name). Unlisted models are judged by name."""
+        info = await self.model_info(provider_id, model)
+        if info is not None:
+            return info.vision, info.name
+        provider = self.get(provider_id)
+        if provider is None:
+            return False, model
+        by_name = (
+            ollama_vision(model, None, None) if provider.local else cloud_vision(provider_id, model)
+        )
+        return by_name or matches_extra(model, self._vision_patterns), model
+
     async def candidates(
-        self, provider_id: str | None, model: str | None, allow_fallback: bool
+        self,
+        provider_id: str | None,
+        model: str | None,
+        allow_fallback: bool,
+        vision: bool = False,
     ) -> list[Candidate]:
-        """Ordered list of (provider, model) pairs to try for a request."""
+        """Ordered list of (provider, model) pairs to try for a request.
+
+        With `vision`, automatic choices and fallbacks only use models that can read
+        images. The user's explicit pick is always tried first; the chat service
+        rejects it beforehand if it is known to be text-only.
+        """
         result: list[Candidate] = []
         if provider_id:
             provider = self.get(provider_id)
@@ -143,7 +191,7 @@ class ProviderRegistry:
                 chosen = model or provider.default_model
                 if not chosen:
                     status = next(s for s in await self.statuses() if s.id == provider_id)
-                    preferred = self._preferred(provider, status)
+                    preferred = self._preferred(provider, status, vision)
                     chosen = preferred.id if preferred else ""
                 if chosen:
                     result.append(Candidate(provider, chosen))
@@ -152,7 +200,7 @@ class ProviderRegistry:
 
         for status in await self.statuses():
             provider = self._providers[status.id]
-            preferred = self._preferred(provider, status)
+            preferred = self._preferred(provider, status, vision)
             if preferred and all(c.provider.id != provider.id for c in result):
                 result.append(Candidate(provider, preferred.id))
         return result if allow_fallback else result[:1]

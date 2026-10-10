@@ -1,10 +1,10 @@
-import type { ModelSelection, ModelsResponse, Role, StreamMeta } from "@/lib/types";
+import type { Citation, ModelSelection, ModelsResponse, Role, StreamMeta } from "@/lib/types";
 
 /**
  * Requests go to `/api/*` on the same origin; `next.config.ts` rewrites them to
  * the FastAPI server (API_URL), so the browser never needs CORS.
  */
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api";
 
 export class ApiError extends Error {
   constructor(
@@ -16,11 +16,13 @@ export class ApiError extends Error {
   }
 }
 
-async function errorMessage(res: Response): Promise<string> {
+export async function errorMessage(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { detail?: unknown };
     if (typeof body.detail === "string") return body.detail;
-    if (Array.isArray(body.detail) && body.detail[0]?.msg) return String(body.detail[0].msg);
+    if (Array.isArray(body.detail) && body.detail[0]?.msg) {
+      return String(body.detail[0].msg).replace(/^Value error, /, "");
+    }
   } catch {
     /* not JSON */
   }
@@ -45,21 +47,51 @@ export async function fetchModels(refresh = false, signal?: AbortSignal): Promis
   return (await res.json()) as ModelsResponse;
 }
 
+export interface ApiImage {
+  media_type: string;
+  /** Base64 without the data: prefix. */
+  data: string;
+}
+
+export interface ApiMessage {
+  role: Role;
+  content: string;
+  images?: ApiImage[];
+}
+
+export interface RagRequest {
+  collections: string[];
+  files: string[];
+  /** The chat the files belong to; the API ignores other chats' files. */
+  chat_id?: string;
+}
+
+export interface SourcesEvent {
+  cited_text: string;
+  grounded: boolean;
+  sources: Citation[];
+}
+
 export interface StreamChatOptions {
-  messages: { role: Role; content: string }[];
+  messages: ApiMessage[];
   selection: ModelSelection;
+  /** Search these Library collections / chat files and answer with citations. */
+  rag?: RagRequest | null;
   signal: AbortSignal;
   onMeta: (meta: StreamMeta) => void;
   onDelta: (text: string) => void;
+  onSources?: (sources: SourcesEvent) => void;
 }
 
 /** POST /api/chat and parse the server-sent event stream. */
 export async function streamChat({
   messages,
   selection,
+  rag,
   signal,
   onMeta,
   onDelta,
+  onSources,
 }: StreamChatOptions): Promise<void> {
   let res: Response;
   try {
@@ -70,6 +102,7 @@ export async function streamChat({
         messages,
         provider: selection?.provider ?? null,
         model: selection?.model ?? null,
+        ...(rag && (rag.collections.length || rag.files.length) ? { rag } : {}),
       }),
       signal,
     });
@@ -96,6 +129,9 @@ export async function streamChat({
     switch (event) {
       case "meta":
         onMeta(payload as unknown as StreamMeta);
+        break;
+      case "sources":
+        onSources?.(payload as unknown as SourcesEvent);
         break;
       case "error":
         throw new ApiError(String(payload.message ?? "Something went wrong."));

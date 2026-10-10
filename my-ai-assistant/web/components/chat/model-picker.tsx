@@ -3,6 +3,7 @@
 import {
   ChevronDownIcon,
   CloudIcon,
+  EyeIcon,
   HardDriveIcon,
   RefreshCwIcon,
   SparklesIcon,
@@ -26,12 +27,35 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { UseModels } from "@/hooks/use-models";
 import { formatBytes } from "@/lib/helpers";
+import type { ModelInfo } from "@/lib/types";
 
 const AUTO = "auto";
 const SEP = "::";
 
-export function ModelPicker({ models }: { models: UseModels }) {
-  const { data, loading, error, selection, effective, select, refresh } = models;
+function SeesImages({ model }: { model: ModelInfo }) {
+  if (!model.vision) return null;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 text-[10px] leading-4 font-medium text-muted-foreground"
+      title="This model can read photos"
+    >
+      <EyeIcon className="size-2.5" />
+      Sees images
+    </span>
+  );
+}
+
+export function ModelPicker({
+  models,
+  forPhotos = false,
+}: {
+  models: UseModels;
+  /** The chat has photos: Auto shows the model that will look at them. */
+  forPhotos?: boolean;
+}) {
+  const { data, loading, error, selection, select, refresh } = models;
+  const effective =
+    !selection && forPhotos && data?.default_vision ? data.default_vision : models.effective;
 
   if (loading && !data) return <Skeleton className="h-9 w-40" />;
 
@@ -82,7 +106,8 @@ export function ModelPicker({ models }: { models: UseModels }) {
             <span className="flex flex-col">
               <span>Auto</span>
               <span className="text-xs text-muted-foreground">
-                Local model first, cloud if unavailable
+                Local model first, cloud if unavailable. With photos, picks a model that can
+                see images.
               </span>
             </span>
           </DropdownMenuRadioItem>
@@ -94,6 +119,7 @@ export function ModelPicker({ models }: { models: UseModels }) {
           {local?.models.map((m) => (
             <DropdownMenuRadioItem key={m.id} value={`${m.provider}${SEP}${m.id}`}>
               <span className="truncate">{m.name}</span>
+              <SeesImages model={m} />
               <span className="ml-auto pl-2 text-xs text-muted-foreground">
                 {[m.parameter_size, formatBytes(m.size_bytes)].filter(Boolean).join(" · ")}
               </span>
@@ -122,6 +148,9 @@ export function ModelPicker({ models }: { models: UseModels }) {
                   {p.models.map((m) => (
                     <DropdownMenuRadioItem key={m.id} value={`${m.provider}${SEP}${m.id}`}>
                       <span className="truncate">{m.name}</span>
+                      <span className="ml-auto pl-2">
+                        <SeesImages model={m} />
+                      </span>
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>

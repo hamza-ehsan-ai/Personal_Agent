@@ -5,7 +5,19 @@ import { ArrowDownIcon } from "lucide-react";
 
 import { Message } from "@/components/chat/message";
 import { Button } from "@/components/ui/button";
-import type { Conversation } from "@/lib/types";
+import type { ChatMessage, Conversation } from "@/lib/types";
+
+/** What a pending reply is searching, when it uses files or the Library. */
+function searchLabel(messages: ChatMessage[], i: number): string | undefined {
+  const m = messages[i];
+  if (!m.pending || m.content) return undefined;
+  const asked = messages[i - 1];
+  const names = (asked?.collections ?? []).map((c) => c.name);
+  const hasFiles = messages.slice(0, i).some((x) => x.files?.length);
+  if (names.length) return `Searching ${names.join(", ")}${hasFiles ? " and your files" : ""}…`;
+  if (hasFiles) return "Reading your files…";
+  return undefined;
+}
 
 const NEAR_BOTTOM_PX = 120;
 
@@ -62,6 +74,12 @@ export function MessageList({
               key={m.id}
               message={m}
               isLast={i === conversation.messages.length - 1}
+              lookingIds={
+                m.pending && !m.content
+                  ? conversation.messages[i - 1]?.images?.map((img) => img.id)
+                  : undefined
+              }
+              searching={searchLabel(conversation.messages, i)}
               onRegenerate={onRegenerate}
               onFeedback={onFeedback}
             />
